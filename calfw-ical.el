@@ -115,34 +115,145 @@ events have not been supported yet."
     (replace-regexp-in-string "\\\\n" "\n"
                               (replace-regexp-in-string "\\\\," "," string))))
 
-(defun cfw:ical-convert-event (event)
-  (destructuring-bind (dtag date start end) (cfw:ical-event-get-dates event)
-    (make-cfw:event
-     :start-date  date
-     :start-time  start
-     :end-date    (when (equal dtag 'period) end)
-     :end-time    (when (equal dtag 'time)   end)
-     :title       (cfw:ical-sanitize-string
-                   (icalendar--get-event-property event 'SUMMARY))
-     :location    (cfw:ical-sanitize-string
-                   (icalendar--get-event-property event 'LOCATION))
-     :description (cfw:ical-sanitize-string
-                   (icalendar--get-event-property event 'DESCRIPTION)))))
+(defun cfw:ical-convert-recurring-event (zone-map ical-event)
+  (let* ((dtstart (icalendar--get-event-property ical-event 'DTSTART))
+         (dtstart-zone (icalendar--find-time-zone
+                        (icalendar--get-event-property-attributes ical-event 'DTSTART)
+                        zone-map))
+         (dtstart-dec (icalendar--decode-isodatetime dtstart nil dtstart-zone))
+         (dtend (icalendar--get-event-property ical-event 'DTEND))
+         (dtend-zone (icalendar--find-time-zone
+                      (icalendar--get-event-property-attributes ical-event 'DTEND) zone-map))
+         (dtend-dec (icalendar--decode-isodatetime dtend nil dtend-zone))
+         (start-t (and dtstart
+                       (> (length dtstart) 8)
+                       dtstart-dec))
+         (summary (icalendar--convert-string-for-import
+                   (or (icalendar--get-event-property ical-event 'SUMMARY)
+                       "No summary")))
+         end-d
+         end-1-d
+         end-t)
+    (let* ((rrule        (icalendar--get-event-property ical-event 'RRULE))
+           (rrule-props  (icalendar--split-value rrule))
+           (frequency    (cadr (assoc 'FREQ rrule-props)))
+           (until        (cadr (assoc 'UNTIL rrule-props)))
+           (count        (cadr (assoc 'COUNT rrule-props)))
+           (interval     (read (or (cadr (assoc 'INTERVAL rrule-props)) "1")))
+           (until-conv   (icalendar--decode-isodatetime until))
+           (until-1-conv (icalendar--decode-isodatetime until -1))
+           (result nil))
+      (when count
+        (if until
+            (message "Must not have UNTIL and COUNT -- ignoring COUNT element!")
+          (let ((until-1 0))
+            (cond ((string-equal frequency "DAILY")
+                   (setq until (icalendar--add-decoded-times
+                                dtstart-dec
+                                (list 0 0 0 (* (read count) interval) 0 0)))
+                   (setq until-1 (icalendar--add-decoded-times
+                                  dtstart-dec
+                                  (list 0 0 0 (* (- (read count) 1) interval)
+                                        0 0)))
+                   )
+                  ((string-equal frequency "WEEKLY")
+                   (setq until (icalendar--add-decoded-times
+                                dtstart-dec
+                                (list 0 0 0 (* (read count) 7 interval) 0 0)))
+                   (setq until-1 (icalendar--add-decoded-times
+                                  dtstart-dec
+                                  (list 0 0 0 (* (- (read count) 1) 7
+                                                 interval) 0 0)))
+                   )
+                  ((string-equal frequency "MONTHLY")
+                   (setq until (icalendar--add-decoded-times
+                                dtstart-dec (list 0 0 0 0 (* (- (read count) 1)
+                                                             interval) 0)))
+                   (setq until-1 (icalendar--add-decoded-times
+                                  dtstart-dec (list 0 0 0 0 (* (- (read count) 1)
+                                                               interval) 0)))
+                   )
+                  ((string-equal frequency "YEARLY")
+                   (setq until (icalendar--add-decoded-times
+                                dtstart-dec (list 0 0 0 0 0 (* (- (read count) 1)
+                                                               interval))))
+                   (setq until-1 (icalendar--add-decoded-times
+                                  dtstart-dec
+                                  (list 0 0 0 0 0 (* (- (read count) 1)
+                                                     interval))))
+                   )
+                  (t
+                   (message "Cannot handle COUNT attribute for `%s' events."
+                            frequency)))
+            (setq until-conv until)
+            (setq until-1-conv until-1))))
+
+      (cond ((and (string-equal frequency "DAILY"))
+             (if until
+                 (let ((event-out
+                        (list
+                         (make-cfw:event
+                          :start-date  (cfw:decode-to-calendar dtstart-dec)
+                          :start-time  (cfw:time (nth 2 dtstart-dec) (nth 1 dtstart-dec))
+                          :end-date    nil; (cfw:decode-to-calendar dtstart-dec)
+                          :end-time    (cfw:time (nth 2 dtend-dec) (nth 1 dtend-dec))
+                          :title       (cfw:ical-sanitize-string
+                                        (icalendar--get-event-property event 'SUMMARY))
+                          :location    (cfw:ical-sanitize-string
+                                        (icalendar--get-event-property event 'LOCATION))
+                          :description (cfw:ical-sanitize-string
+                                        (icalendar--get-event-property event 'DESCRIPTION)))
+                         (make-cfw:event
+                          :start-date  (cfw:decode-to-calendar (if count until-1-conv until-conv))
+                          :start-time  (cfw:time (nth 2 dtstart-dec) (nth 1 dtstart-dec))
+                          :end-date    nil ;(cfw:decode-to-calendar (if count until-1-conv until-conv))
+                          :end-time    (cfw:time (nth 2 dtend-dec) (nth 1 dtend-dec))
+                          :title       (cfw:ical-sanitize-string
+                                        (icalendar--get-event-property event 'SUMMARY))
+                          :location    (cfw:ical-sanitize-string
+                                        (icalendar--get-event-property event 'LOCATION))
+                          :description (cfw:ical-sanitize-string
+                                        (icalendar--get-event-property event 'DESCRIPTION))))))
+                   event-out)
+               nil))))))
+
+(defun cfw:ical-convert-event (zone-map event)
+  (if (icalendar--get-event-property event 'RRULE)
+      (cfw:ical-convert-recurring-event zone-map event)
+    (destructuring-bind (dtag date start end) (cfw:ical-event-get-dates event)
+      (make-cfw:event
+       :start-date  date
+       :start-time  start
+       :end-date    (when (equal dtag 'period) end)
+       :end-time    (when (equal dtag 'time)   end)
+       :title       (cfw:ical-sanitize-string
+                     (icalendar--get-event-property event 'SUMMARY))
+       :location    (cfw:ical-sanitize-string
+                     (icalendar--get-event-property event 'LOCATION))
+       :description (cfw:ical-sanitize-string
+                     (icalendar--get-event-property event 'DESCRIPTION))))))
 
 (defun cfw:ical-convert-ical-to-calfw (ical-list)
-  (loop with zone-map = (icalendar--convert-all-timezones ical-list)
-        for e in (icalendar--all-events ical-list)
-        for event = (cfw:ical-convert-event e)
-        if event
-        if (cfw:event-end-date event)
-        collect event into periods
-        else
-        collect event into contents
-        else do
-        (progn
-          (message "Ignoring event \"%s\"" e)
-          (message "Cannot handle this event, tag: %s" e))
-        finally (return `((periods ,periods) ,@contents))))
+  (let* ((zone-map (icalendar--convert-all-timezones ical-list))
+         (ical-events (icalendar--all-events ical-list)))
+    (let (events-out)
+      (dolist (ical-event ical-events)
+        (let ((conv-events (cfw:ical-convert-event zone-map ical-event)))
+          (if (listp conv-events)
+              (dolist (conv-event conv-events)
+                (setq events-out (cons conv-event events-out)))
+            (setq events-out (cons conv-events events-out)))))
+      (cl-loop for event in events-out
+               if event
+               if (cfw:event-end-date event)
+               collect event into periods
+               else
+               collect event into contents
+               else do
+               (progn
+                 (message "Ignoring event \"%s\"" e)
+                 (message "Cannot handle this event, tag: %s" e))
+               finally (return `((periods ,periods) ,@contents))))))
 
 (defun cfw:ical-debug (f)
   (interactive)
