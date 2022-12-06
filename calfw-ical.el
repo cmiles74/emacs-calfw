@@ -190,31 +190,27 @@ events have not been supported yet."
 
       (cond ((and (string-equal frequency "DAILY"))
              (if until
-                 (let ((event-out
-                        (list
-                         (make-cfw:event
-                          :start-date  (cfw:decode-to-calendar dtstart-dec)
-                          :start-time  (cfw:time (nth 2 dtstart-dec) (nth 1 dtstart-dec))
-                          :end-date    nil; (cfw:decode-to-calendar dtstart-dec)
-                          :end-time    (cfw:time (nth 2 dtend-dec) (nth 1 dtend-dec))
-                          :title       (cfw:ical-sanitize-string
-                                        (icalendar--get-event-property event 'SUMMARY))
-                          :location    (cfw:ical-sanitize-string
-                                        (icalendar--get-event-property event 'LOCATION))
-                          :description (cfw:ical-sanitize-string
-                                        (icalendar--get-event-property event 'DESCRIPTION)))
-                         (make-cfw:event
-                          :start-date  (cfw:decode-to-calendar (if count until-1-conv until-conv))
-                          :start-time  (cfw:time (nth 2 dtstart-dec) (nth 1 dtstart-dec))
-                          :end-date    nil ;(cfw:decode-to-calendar (if count until-1-conv until-conv))
-                          :end-time    (cfw:time (nth 2 dtend-dec) (nth 1 dtend-dec))
-                          :title       (cfw:ical-sanitize-string
-                                        (icalendar--get-event-property event 'SUMMARY))
-                          :location    (cfw:ical-sanitize-string
-                                        (icalendar--get-event-property event 'LOCATION))
-                          :description (cfw:ical-sanitize-string
-                                        (icalendar--get-event-property event 'DESCRIPTION))))))
-                   event-out)
+               (let ((events-out)
+                     (counter dtstart-dec))
+                 (while (time-less-p (encode-time counter)
+                                     (encode-time (if count until-1-conv until-conv)))
+                   (message "`%s'  `%s'" counter dtend-dec)
+                   (setq events-out
+                         (cons
+                          (make-cfw:event
+                           :start-date  (cfw:decode-to-calendar counter)
+                           :start-time  (cfw:time (nth 2 dtstart-dec) (nth 1 dtstart-dec))
+                           :end-date    nil; (cfw:decode-to-calendar dtstart-dec)
+                           :end-time    (cfw:time (nth 2 dtend-dec) (nth 1 dtend-dec))
+                           :title       (cfw:ical-sanitize-string
+                                         (icalendar--get-event-property event 'SUMMARY))
+                           :location    (cfw:ical-sanitize-string
+                                         (icalendar--get-event-property event 'LOCATION))
+                           :description (cfw:ical-sanitize-string
+                                         (icalendar--get-event-property event 'DESCRIPTION)))
+                          events-out))
+                   (setq counter (decode-time (time-add (encode-time counter) (days-to-time 1)))))
+                 events-out)
                nil))))))
 
 (defun cfw:ical-convert-event (zone-map event)
